@@ -2223,6 +2223,15 @@ pub fn semanticPrompt(
             // The k (kind) option specifies the type of prompt:
             // regular primary prompt (k=i or default),
             // right-side prompts (k=r), or prompts for continuation lines (k=c or k=s).
+            //
+            // A foreground program may exit without popping its Kitty
+            // keyboard mode. The explicit prompt boundary is the first
+            // reliable indication that command output has finished and the
+            // shell is ready to accept input again, so discard any stale
+            // application stack here. Earlier command lifecycle events may
+            // still be followed by active output and must preserve the mode.
+            self.screens.active.kitty_keyboard.reset();
+
             self.screens.active.cursorSetSemanticContent(.{
                 .prompt = cmd.readOption(.prompt_kind) orelse .initial,
             });
@@ -16040,6 +16049,43 @@ test "Terminal: OSC133C at x>0 on prompt row does not clear prompt mark" {
         } }).?;
         try testing.expectEqual(.prompt_continuation, list_cell.row.semantic_prompt);
     }
+}
+
+test "Terminal: OSC133 prompt start clears stale kitty keyboard state" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{ .cols = 10, .rows = 5 });
+    defer t.deinit(alloc);
+
+    const kitty_flags: kitty.KeyFlags = .{
+        .disambiguate = true,
+        .report_events = true,
+        .report_all = true,
+    };
+    t.screens.active.kitty_keyboard.push(kitty_flags);
+
+    // Starting command output means the foreground program is still active,
+    // so its negotiated keyboard protocol must remain enabled.
+    try t.semanticPrompt(.init(.end_input_start_output));
+    try testing.expectEqual(
+        kitty_flags,
+        t.screens.active.kitty_keyboard.current(),
+    );
+
+    // Ending the command is not sufficient to prove output has stopped, so
+    // preserve the negotiated protocol until the next explicit prompt.
+    try t.semanticPrompt(.init(.end_command));
+    try testing.expectEqual(
+        kitty_flags,
+        t.screens.active.kitty_keyboard.current(),
+    );
+
+    // Once shell integration starts the next prompt, any keyboard protocol
+    // state the foreground program failed to pop must not leak into shell input.
+    try t.semanticPrompt(.init(.prompt_start));
+    try testing.expectEqual(
+        kitty.KeyFlags.disabled,
+        t.screens.active.kitty_keyboard.current(),
+    );
 }
 
 test "Terminal: multiple newlines in prompt mode marks all rows" {
