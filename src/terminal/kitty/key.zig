@@ -16,6 +16,11 @@ pub const FlagStack = struct {
         return self.flags[self.idx];
     }
 
+    /// Disable the protocol and discard every saved stack entry.
+    pub fn reset(self: *FlagStack) void {
+        self.* = .{};
+    }
+
     /// Perform the "set" operation as described in the spec for
     /// the CSI = u sequence.
     pub fn set(
@@ -134,6 +139,20 @@ test "FlagStack: push pop" {
 
     stack.pop(1);
     try testing.expectEqual(Flags{}, stack.current());
+}
+
+test "FlagStack: reset clears all entries" {
+    const testing = std.testing;
+    var stack: FlagStack = .{};
+    stack.push(.{ .disambiguate = true });
+    stack.push(.{ .report_events = true, .report_all = true });
+
+    stack.reset();
+    try testing.expectEqual(Flags.disabled, stack.current());
+
+    // A later pop must not uncover an older application mode.
+    stack.pop(1);
+    try testing.expectEqual(Flags.disabled, stack.current());
 }
 
 test "FlagStack: pop big number" {
